@@ -388,13 +388,20 @@ class TestFordSafetyBase(common.CarSafetyTest):
             self.assertEqual(enable_mads and main_button_msg_valid, self.safety.get_controls_allowed_lat())
 
 
+MSG_TrailerInfo_FD1 = 0x443
+
+# F-350: MRR_Detection CAN IDs on bus 1 (0x120-0x135)
+FORD_MRR_TX = [[addr, 1] for addr in range(0x120, 0x136)]
+
+
 class TestFordCANFDStockSafety(TestFordSafetyBase):
   STEER_MESSAGE = MSG_LateralMotionControl2
 
   TX_MSGS = [
     [MSG_Steering_Data_FD1, 0], [MSG_Steering_Data_FD1, 2], [MSG_ACCDATA_3, 0], [MSG_Lane_Assist_Data1, 0],
     [MSG_LateralMotionControl2, 0], [MSG_IPMA_Data, 0],
-  ]
+    [MSG_Yaw_Data_FD1, 2], [MSG_TrailerInfo_FD1, 0],
+  ] + FORD_MRR_TX
   RELAY_MALFUNCTION_ADDRS = {0: (MSG_ACCDATA_3, MSG_Lane_Assist_Data1, MSG_LateralMotionControl2,
                                  MSG_IPMA_Data)}
 
@@ -489,7 +496,8 @@ class TestFordCANFDLongitudinalSafety(TestFordLongitudinalSafetyBase):
   TX_MSGS = [
     [MSG_Steering_Data_FD1, 0], [MSG_Steering_Data_FD1, 2], [MSG_ACCDATA, 0], [MSG_ACCDATA_3, 0], [MSG_Lane_Assist_Data1, 0],
     [MSG_LateralMotionControl2, 0], [MSG_IPMA_Data, 0],
-  ]
+    [MSG_Yaw_Data_FD1, 2], [MSG_TrailerInfo_FD1, 0],
+  ] + FORD_MRR_TX
   RELAY_MALFUNCTION_ADDRS = {0: (MSG_ACCDATA, MSG_ACCDATA_3, MSG_Lane_Assist_Data1, MSG_LateralMotionControl2,
                                  MSG_IPMA_Data)}
 
