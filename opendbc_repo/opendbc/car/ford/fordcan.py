@@ -194,7 +194,7 @@ def create_acc_ui_msg(packer, CAN: CanBus, CP, main_on: bool, enabled: bool, fcw
   else:
     status = 1    # Standby
 
-  values = {s: stock_values[s] for s in [
+  values = {s: stock_values.get(s, 0) for s in [
     "HaDsply_No_Cs",
     "HaDsply_No_Cnt",
     "AccStopStat_D_Dsply",       # ACC stopped status message
@@ -315,7 +315,7 @@ def create_lkas_ui_msg(packer, CAN: CanBus, main_on: bool, enabled: bool, hands:
     #Set this to 0 if hud_control is None
     lines = 0
 
-  values = {s: stock_values[s] for s in [
+  values = {s: stock_values.get(s, 0) for s in [
     "FeatConfigIpmaActl",
     "FeatNoIpmaActl",
     "PersIndexIpma_D_Actl",
@@ -350,7 +350,7 @@ def create_button_msg(packer, bus: int, stock_values: dict, cancel=False, resume
     icbm_button: Optional string signal name for ICBM button press (e.g., "CcAslButtnSetIncPress", "CcAslButtnSetDecPress")
   """
 
-  values = {s: stock_values[s] for s in [
+  values = {s: stock_values.get(s, 0) for s in [
     "HeadLghtHiFlash_D_Stat",  # SCCM Passthrough the remaining buttons
     "TurnLghtSwtch_D_Stat",    # SCCM Turn signal switch
     "WiprFront_D_Stat",
@@ -395,3 +395,77 @@ def create_button_msg(packer, bus: int, stock_values: dict, cancel=False, resume
     values[icbm_button] = 1
 
   return packer.make_can_msg("Steering_Data_FD1", bus, values)
+
+
+# ── MRR_Detection radar spoof for F-350 confused deputy (longitudinal) ──────
+# Injects fake radar detections on bus 1 so IPMA generates signed ACCDATA.
+# DBC: FORD_CADS_64, messages MRR_Detection_001-022 (CAN IDs 0x120-0x135)
+# Each 64-byte message holds 6 detection slots (message 022 holds 3).
+# Signal layout per detection: 72 bits, Intel byte order.
+#
+# Bit layout for detection slot N (0-indexed) within a message:
+#   base = N * 72 (bit offset from byte 0)
+#   VALID_LEVEL:       base+0,   1 bit
+#   RANGE_RATE:        base+1,  14 bits  (scale 0.015625, offset -128, m/s)
+#   RANGE:             base+18, 14 bits  (scale 0.015625, offset 0, m)
+#   SCAN_INDEX_2LSB:   base+17,  2 bits  (NOTE: overlaps in DBC bit notation)
+#   AZIMUTH:           base+34, 14 bits  (scale 0.0003834, offset -3.1416, rad)
+#   CONFID_AZIMUTH:    base+32,  2 bits
+#   ND_TARGET:         base+48,  1 bit
+#   HOST_VEH_CLUTTER:  base+49,  1 bit
+#   AMPLITUDE:         base+1,   7 bits  (NOTE: shares start with RANGE_RATE in DBC)
+#   SUPER_RES_TARGET:  base+56,  1 bit
+#
+# Rather than manual bit packing, we use the FORD_CADS_64 DBC via CANPacker
+# with exact signal names: CAN_DET_RANGE_{MM:02d}_{DD:02d} etc.
+
+MRR_DET_MSG_COUNT_64 = 22      # messages in CANFD mode
+MRR_DET_TRACKS_PER_MSG = 6     # tracks per message (message 22 has 3)
+MRR_DET_START_ADDR = 0x120     # CAN ID of MRR_Detection_001
+
+
+def create_radar_spoof_msgs(radar_packer, CAN, scan_index, lead_dist=0.0, lead_vrel=0.0, lead_azimuth=0.0, inject_lead=False):
+  """
+  Create a full set of MRR_Detection CAN-FD messages with one optional fake lead.
+
+  Args:
+    radar_packer: CANPacker loaded with FORD_CADS_64 DBC
+    CAN: CanBus instance (uses CAN.radar for bus number)
+    scan_index: current scan mode (0-3), must cycle each call
+    lead_dist: fake lead distance in meters (0-255m)
+    lead_vrel: fake lead relative velocity in m/s (-128 to +128, negative=closing)
+    lead_azimuth: fake lead angle in radians (0=straight ahead)
+    inject_lead: True to inject a fake detection in message 001 slot 01
+
+  Returns:
+    list of CAN messages (addr, bus, data) for all 22 MRR_Detection messages
+  """
+  msgs = []
+  for msg_idx in range(1, MRR_DET_MSG_COUNT_64 + 1):
+    msg_name = f"MRR_Detection_{msg_idx:03d}"
+    max_tracks = 3 if msg_idx == MRR_DET_MSG_COUNT_64 else MRR_DET_TRACKS_PER_MSG
+    values = {}
+
+    for trk in range(1, max_tracks + 1):
+      sfx = f"_{msg_idx:02d}_{trk:02d}"
+
+      # Inject one fake lead in message 001, track 01
+      if inject_lead and msg_idx == 1 and trk == 1:
+        values[f"CAN_DET_VALID_LEVEL{sfx}"] = 1
+        values[f"CAN_DET_RANGE{sfx}"] = max(0.0, min(255.984, lead_dist))
+        values[f"CAN_DET_RANGE_RATE{sfx}"] = max(-128.0, min(127.984, lead_vrel))
+        values[f"CAN_DET_AZIMUTH{sfx}"] = max(-3.1416, min(3.1396, lead_azimuth))
+        values[f"CAN_DET_AMPLITUDE{sfx}"] = 10  # +10 dBsm, moderate return
+        values[f"CAN_DET_CONFID_AZIMUTH{sfx}"] = 3  # high confidence
+        values[f"CAN_SCAN_INDEX_2LSB{sfx}"] = scan_index
+        values[f"CAN_DET_ND_TARGET{sfx}"] = 0
+        values[f"CAN_DET_HOST_VEH_CLUTTER{sfx}"] = 0
+        values[f"CAN_DET_SUPER_RES_TARGET{sfx}"] = 0
+      else:
+        # Invalid detection (empty slot)
+        values[f"CAN_DET_VALID_LEVEL{sfx}"] = 0
+        values[f"CAN_SCAN_INDEX_2LSB{sfx}"] = scan_index
+
+    msgs.append(radar_packer.make_can_msg(msg_name, CAN.radar, values))
+
+  return msgs

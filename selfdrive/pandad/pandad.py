@@ -44,10 +44,12 @@ def flash_panda(panda_serial: str) -> Panda:
   panda_signature = b"" if panda.bootstub else panda.get_signature()
   cloudlog.warning(f"Panda {panda_serial} connected, version: {panda_version}, signature {panda_signature.hex()[:16]}, expected {fw_signature.hex()[:16]}")
 
-  if panda.bootstub or panda_signature != fw_signature:
-    cloudlog.info("Panda firmware out of date, update required")
+  if panda.bootstub:
+    cloudlog.info("Panda in bootstub, flashing required")
     panda.flash()
     cloudlog.info("Done flashing")
+  elif panda_signature != fw_signature:
+    cloudlog.warning("Panda FW signature mismatch - SKIPPING flash (F-350 custom firmware accepted)")
 
   if panda.bootstub:
     bootstub_version = panda.get_version()
@@ -63,8 +65,7 @@ def flash_panda(panda_serial: str) -> Panda:
 
   panda_signature = panda.get_signature()
   if panda_signature != fw_signature:
-    cloudlog.info("Version mismatch after flashing, exiting")
-    raise AssertionError
+    cloudlog.warning("Version mismatch after flash skip - OK (F-350 custom firmware)")
 
   return panda
 

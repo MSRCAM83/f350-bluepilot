@@ -9,6 +9,9 @@
 #define FORD_BrakeSysFeatures      0x415U   // RX from ABS, for vehicle speed
 #define FORD_EngVehicleSpThrottle2 0x202U   // RX from PCM, for second vehicle speed
 #define FORD_Yaw_Data_FD1          0x91U    // RX from RCM, for yaw rate
+#define FORD_TrailerInfo_FD1       0x443U   // TX by OP, trailer spoof for F-350 steering authority
+#define FORD_MRR_DET_START         0x120U   // MRR_Detection_001 start address (radar bus)
+#define FORD_MRR_DET_END           0x135U   // MRR_Detection_022 end address (radar bus)
 #define FORD_Steering_Data_FD1     0x083U   // TX by OP, various driver switches and LKAS/CC buttons
 #define FORD_ACCDATA               0x186U   // TX by OP, ACC controls
 #define FORD_ACCDATA_3             0x18AU   // TX by OP, ACC/TJA user interface
@@ -651,46 +654,79 @@ static safety_config ford_init(uint16_t param) {
   // warning: quality flags are not yet checked in openpilot's CAN parser,
   // this may be the cause of blocked messages
   static RxCheck ford_rx_checks[] = {
-    {.msg = {{FORD_BrakeSysFeatures, 0, 8, 50U, .max_counter = 15U}, { 0 }, { 0 }}},
+    {.msg = {{FORD_BrakeSysFeatures, 0, 8, 50U, .max_counter = 15U}, {FORD_BrakeSysFeatures, 0, 16, 50U, .max_counter = 15U}, { 0 }}},
     // FORD_EngVehicleSpThrottle2 has a counter that either randomly skips or by 2, likely ECU bug
     // Some hybrid models also experience a bug where this checksum mismatches for one or two frames under heavy acceleration with ACC
     // It has been confirmed that the Bronco Sport's camera only disallows ACC for bad quality flags, not counters or checksums, so we match that
-    {.msg = {{FORD_EngVehicleSpThrottle2, 0, 8, 50U, .ignore_checksum = true, .ignore_counter = true}, { 0 }, { 0 }}},
+    {.msg = {{FORD_EngVehicleSpThrottle2, 0, 8, 50U, .ignore_checksum = true, .ignore_counter = true}, {FORD_EngVehicleSpThrottle2, 0, 16, 50U, .ignore_checksum = true, .ignore_counter = true}, { 0 }}},
     {.msg = {{FORD_Yaw_Data_FD1, 0, 8, 100U, .max_counter = 255U}, { 0 }, { 0 }}},
     // These messages have no counter or checksum
-    {.msg = {{FORD_EngBrakeData, 0, 8, 10U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},
-    {.msg = {{FORD_EngVehicleSpThrottle, 0, 8, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},
-    {.msg = {{FORD_DesiredTorqBrk, 0, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},
+    {.msg = {{FORD_EngBrakeData, 0, 8, 10U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {FORD_EngBrakeData, 0, 16, 10U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }}},
+    {.msg = {{FORD_EngVehicleSpThrottle, 0, 8, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {FORD_EngVehicleSpThrottle, 0, 16, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }}},
+    {.msg = {{FORD_DesiredTorqBrk, 0, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {FORD_DesiredTorqBrk, 0, 16, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }}},
     {.msg = {{FORD_Steering_Data_FD1, 0, 8, 10U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},
   };
 
   #define FORD_COMMON_TX_MSGS \
     {FORD_Steering_Data_FD1, 0, 8, .check_relay = false}, \
     {FORD_Steering_Data_FD1, 2, 8, .check_relay = false}, \
-    {FORD_ACCDATA_3, 0, 8, .check_relay = true},          \
-    {FORD_Lane_Assist_Data1, 0, 8, .check_relay = true},  \
-    {FORD_IPMA_Data, 0, 8, .check_relay = true},          \
+    {FORD_ACCDATA_3, 0, 8, .check_relay = false},         \
+    {FORD_Lane_Assist_Data1, 0, 8, .check_relay = false}, \
+    {FORD_IPMA_Data, 0, 8, .check_relay = false},         \
+
+  // F-350: MRR_Detection radar spoof TX on radar bus (bus 1)
+  // MRR_Detection_001-021: 64-byte CAN-FD, MRR_Detection_022: 24-byte
+  // CAN IDs 0x120-0x135 (288-309 decimal)
+  #define FORD_MRR_RADAR_TX_MSGS \
+    {0x120, 1, 64, .check_relay = false}, \
+    {0x121, 1, 64, .check_relay = false}, \
+    {0x122, 1, 64, .check_relay = false}, \
+    {0x123, 1, 64, .check_relay = false}, \
+    {0x124, 1, 64, .check_relay = false}, \
+    {0x125, 1, 64, .check_relay = false}, \
+    {0x126, 1, 64, .check_relay = false}, \
+    {0x127, 1, 64, .check_relay = false}, \
+    {0x128, 1, 64, .check_relay = false}, \
+    {0x129, 1, 64, .check_relay = false}, \
+    {0x12A, 1, 64, .check_relay = false}, \
+    {0x12B, 1, 64, .check_relay = false}, \
+    {0x12C, 1, 64, .check_relay = false}, \
+    {0x12D, 1, 64, .check_relay = false}, \
+    {0x12E, 1, 64, .check_relay = false}, \
+    {0x12F, 1, 64, .check_relay = false}, \
+    {0x130, 1, 64, .check_relay = false}, \
+    {0x131, 1, 64, .check_relay = false}, \
+    {0x132, 1, 64, .check_relay = false}, \
+    {0x133, 1, 64, .check_relay = false}, \
+    {0x134, 1, 64, .check_relay = false}, \
+    {0x135, 1, 24, .check_relay = false}, \
 
   static const CanMsg FORD_CANFD_LONG_TX_MSGS[] = {
     FORD_COMMON_TX_MSGS
-    {FORD_ACCDATA, 0, 8, .check_relay = true},
-    {FORD_LateralMotionControl2, 0, 8, .check_relay = true},
+    {FORD_ACCDATA, 0, 8, .check_relay = false},
+    {FORD_LateralMotionControl2, 0, 8, .check_relay = false},
+    {FORD_Yaw_Data_FD1, 2, 8, .check_relay = false},
+    {FORD_TrailerInfo_FD1, 0, 8, .check_relay = false},
+    FORD_MRR_RADAR_TX_MSGS
   };
 
   static const CanMsg FORD_CANFD_STOCK_TX_MSGS[] = {
     FORD_COMMON_TX_MSGS
-    {FORD_LateralMotionControl2, 0, 8, .check_relay = true},
+    {FORD_LateralMotionControl2, 0, 8, .check_relay = false},
+    {FORD_Yaw_Data_FD1, 2, 8, .check_relay = false},
+    {FORD_TrailerInfo_FD1, 0, 8, .check_relay = false},
+    FORD_MRR_RADAR_TX_MSGS
   };
 
   static const CanMsg FORD_STOCK_TX_MSGS[] = {
     FORD_COMMON_TX_MSGS
-    {FORD_LateralMotionControl, 0, 8, .check_relay = true},
+    {FORD_LateralMotionControl, 0, 8, .check_relay = false},
   };
 
   static const CanMsg FORD_LONG_TX_MSGS[] = {
     FORD_COMMON_TX_MSGS
-    {FORD_ACCDATA, 0, 8, .check_relay = true},
-    {FORD_LateralMotionControl, 0, 8, .check_relay = true},
+    {FORD_ACCDATA, 0, 8, .check_relay = false},
+    {FORD_LateralMotionControl, 0, 8, .check_relay = false},
   };
 
   const uint16_t FORD_PARAM_CANFD = 2;

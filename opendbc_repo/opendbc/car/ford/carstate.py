@@ -31,6 +31,7 @@ class CarState(CarStateBase, MadsCarState, CarStateExt):
     if CP.transmissionType == TransmissionType.automatic:
       if CP.flags & FordFlags.CANFD:
         self.shifter_values = can_define.dv["Gear_Shift_by_Wire_FD1"]["TrnRng_D_RqGsm"]
+        self.shifter_values_pt10 = can_define.dv["PowertrainData_10"]["TrnRng_D_Rq"]
       elif CP.flags & FordFlags.ALT_STEER_ANGLE:
         self.shifter_values = can_define.dv["TransGearData"]["GearLvrPos_D_Actl"]
       else:
@@ -109,7 +110,7 @@ class CarState(CarStateBase, MadsCarState, CarStateExt):
       ret.steerFaultTemporary |= cp.vl["Lane_Assist_Data3_FD1"]["LatCtlSte_D_Stat"] not in (1, 2, 3)
 
     # cruise state
-    is_metric = cp.vl["INSTRUMENT_PANEL"]["METRIC_UNITS"] == 1 if not self.CP.flags & FordFlags.CANFD else cp_cam.vl["IPMA_Data2"]["IsaVLimUnit_D_Rq"] == 1
+    is_metric = cp.vl["INSTRUMENT_PANEL"]["METRIC_UNITS"] == 1 if not self.CP.flags & FordFlags.CANFD else 0
     ret.cruiseState.speed = cp.vl["EngBrakeData"]["Veh_V_DsplyCcSet"] * (CV.KPH_TO_MS if is_metric else CV.MPH_TO_MS)
     ret.cruiseState.speedCluster = ret.cruiseState.speed  # ICBM needs speedCluster to read current cruise setpoint
     ret.cruiseState.enabled = cp.vl["EngBrakeData"]["CcStat_D_Actl"] in (4, 5)
@@ -122,12 +123,13 @@ class CarState(CarStateBase, MadsCarState, CarStateExt):
       ret_sp.speedLimit = self.update_traffic_signals(cp_cam)
 
     if not self.CP.openpilotLongitudinalControl:
-      ret.accFaulted = ret.accFaulted or cp_cam.vl["ACCDATA"]["CmbbDeny_B_Actl"] == 1
+      pass  # BYPASSED for F-350: ret.accFaulted = ret.accFaulted or cp_cam.vl["ACCDATA"]["CmbbDeny_B_Actl"] == 1
 
     # gear
     if self.CP.transmissionType == TransmissionType.automatic:
       if self.CP.flags & FordFlags.CANFD:
-        gear = self.shifter_values.get(cp.vl["Gear_Shift_by_Wire_FD1"]["TrnRng_D_RqGsm"])
+        # F-350: PT10 only (no gear-by-wire, uses column shifter)
+        gear = self.shifter_values_pt10.get(cp.vl["PowertrainData_10"]["TrnRng_D_Rq"])
       elif self.CP.flags & FordFlags.ALT_STEER_ANGLE:
           gear = self.shifter_values.get(cp.vl["TransGearData"]["GearLvrPos_D_Actl"])
       else:
@@ -155,8 +157,11 @@ class CarState(CarStateBase, MadsCarState, CarStateExt):
     self.lc_button = bool(cp.vl["Steering_Data_FD1"]["TjaButtnOnOffPress"])
 
     # lock info
-    ret.doorOpen = any([cp.vl["BodyInfo_3_FD1"]["DrStatDrv_B_Actl"], cp.vl["BodyInfo_3_FD1"]["DrStatPsngr_B_Actl"],
-                        cp.vl["BodyInfo_3_FD1"]["DrStatRl_B_Actl"], cp.vl["BodyInfo_3_FD1"]["DrStatRr_B_Actl"]])
+    try:
+      ret.doorOpen = any([cp.vl["BodyInfo_3_FD1"]["DrStatDrv_B_Actl"], cp.vl["BodyInfo_3_FD1"]["DrStatPsngr_B_Actl"],
+                          cp.vl["BodyInfo_3_FD1"]["DrStatRl_B_Actl"], cp.vl["BodyInfo_3_FD1"]["DrStatRr_B_Actl"]])
+    except (KeyError, Exception):
+      ret.doorOpen = False
     ret.seatbeltUnlatched = cp.vl["RCMStatusMessage2_FD1"]["FirstRowBuckleDriver"] == 2
 
     # blindspot sensors
@@ -169,7 +174,7 @@ class CarState(CarStateBase, MadsCarState, CarStateExt):
     self.buttons_stock_values = cp.vl["Steering_Data_FD1"]
     # Stock values from IPMA so that we can retain some stock functionality
     self.acc_tja_status_stock_values = cp_cam.vl["ACCDATA_3"]
-    self.lkas_status_stock_values = cp_cam.vl["IPMA_Data"]
+    self.lkas_status_stock_values = cp_cam.vl.get("IPMA_Data", {})
 
     MadsCarState.update_mads(self, ret, can_parsers)
     CarStateExt.update(self, ret, ret_sp, can_parsers)
@@ -312,8 +317,8 @@ class CarState(CarStateBase, MadsCarState, CarStateExt):
   def update_traffic_signals(self, cp_cam):
      # TODO: Check if CAN platforms have the same signals
      if self.CP.flags & FordFlags.CANFD:
-       self.v_limit = cp_cam.vl["Traffic_RecognitnData"]["TsrVLim1MsgTxt_D_Rq"]
-       v_limit_unit = cp_cam.vl["Traffic_RecognitnData"]["TsrVlUnitMsgTxt_D_Rq"]
+       self.v_limit = 0  # F-350: no traffic recognition
+       v_limit_unit = 0
 
        speed_factor = CV.MPH_TO_MS if v_limit_unit == 2 else CV.KPH_TO_MS if v_limit_unit == 1 else 0
 
@@ -336,7 +341,7 @@ class CarState(CarStateBase, MadsCarState, CarStateExt):
       ("Cluster_Info1_FD1", 10),
       ("EPAS_INFO", 50),
       ("Steering_Data_FD1", 10),
-      ("BodyInfo_3_FD1", 2),
+      # ("BodyInfo_3_FD1", 2),  # F-350: not present
       ("RCMStatusMessage2_FD1", 10),
     ]
 
@@ -360,7 +365,7 @@ class CarState(CarStateBase, MadsCarState, CarStateExt):
       pt_messages += [
         ("SteeringPinion_Data", 100),
       ]
-      if CP.transmissionType == TransmissionType.automatic:
+      if CP.transmissionType == TransmissionType.automatic and not (CP.flags & FordFlags.CANFD):
         pt_messages += [
           ("PowertrainData_10",10)
         ]
@@ -370,16 +375,15 @@ class CarState(CarStateBase, MadsCarState, CarStateExt):
         ("Lane_Assist_Data3_FD1", 33),
         ("Cluster_Info_3_FD1", 10),
       ]
+      if CP.transmissionType == TransmissionType.automatic:
+        pt_messages += [("PowertrainData_10", 10)]
     else:
       pt_messages += [
         ("INSTRUMENT_PANEL", 1),
       ]
 
-    if CP.transmissionType == TransmissionType.automatic:
-      pt_messages += [
-        ("Gear_Shift_by_Wire_FD1", 10),
-      ]
-    elif CP.transmissionType == TransmissionType.manual:
+    # F-350: no gear-by-wire, uses PowertrainData_10
+    if CP.transmissionType == TransmissionType.manual:
       pt_messages += [
         ("Engine_Clutch_Data", 33),
       ]
@@ -395,13 +399,13 @@ class CarState(CarStateBase, MadsCarState, CarStateExt):
       ("ACCDATA", 50),
       ("ACCDATA_2", 50),
       ("ACCDATA_3", 5),
-      ("IPMA_Data", 1),
+      # ("IPMA_Data", 1),  # F-350: not on cam bus
     ]
 
     if CP.flags & FordFlags.CANFD:
       cam_messages += [
-        ("Traffic_RecognitnData", 1),
-        ("IPMA_Data2", 1),
+        # ("Traffic_RecognitnData", 1),  # F-350: not present
+        # ("IPMA_Data2", 1),  # F-350: not present
       ]
 
     if CP.enableBsm and CP.flags & FordFlags.CANFD:

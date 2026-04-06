@@ -10,7 +10,7 @@ from opendbc.car import ACCELERATION_DUE_TO_GRAVITY, Bus, DT_CTRL, apply_hystere
 from opendbc.car.lateral import ISO_LATERAL_ACCEL, apply_std_steer_angle_limits
 from opendbc.car.vehicle_model import VehicleModel
 from opendbc.car.ford import fordcan
-from opendbc.car.ford.values import CarControllerParams, FordFlags, CAR
+from opendbc.car.ford.values import CarControllerParams, FordFlags, CAR, RADAR
 from opendbc.car.interfaces import CarControllerBase, V_CRUISE_MAX
 from selfdrive.modeld.constants import ModelConstants  # for calculations
 from common.pid import PIDController # PID control of lateral
@@ -92,6 +92,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     self.params = Params()
 
     self.packer = CANPacker(dbc_names[Bus.pt])
+    self.radar_packer = CANPacker(RADAR.DELPHI_MRR_64)  # F-350: MRR_Detection radar spoof packer
     self.CAN = fordcan.CanBus(CP)
 
     # Initialize control variables
@@ -144,6 +145,9 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     self.precharge_actuate_release = -0.06 # at what accel value do we release precharge
     self.op_brake_actuate_last = False # init the value for our hysteresis
     self.disable_downhill_comp_UI = True #flag to disable downhill pitch compensation
+
+    # F-350: MRR_Detection radar spoof state
+    self.radar_spoof_scan_index = 2  # start at scan mode 2 (Doppler +-60 m/s, processed by radar_interface)
 
     # # Curvature variables
     self.curvature_lookup_time = 0.42 # from lagd (how far into the future we pull curvature)
@@ -939,7 +943,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     send_ui = (self.main_on_last != main_on) or (self.lkas_enabled_last != CC.latActive) or (self.steer_alert_last != steer_alert)
     # send lkas ui msg at 1Hz or if ui state changes
     if (self.frame % CarControllerParams.LKAS_UI_STEP) == 0 or send_ui:
-      can_sends.append(fordcan.create_lkas_ui_msg(self.packer, self.CAN, main_on, CC.latActive, self.hands, hud_control, CS.lkas_status_stock_values))
+      # can_sends.append(fordcan.create_lkas_ui_msg(self.packer, self.CAN, main_on, CC.latActive, self.hands, hud_control, CS.lkas_status_stock_values))  # F-350: disabled, preserves real IPMA LKA
 
     # send acc ui msg at 5Hz or if ui state changes
     send_bars = False
@@ -990,4 +994,51 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     new_actuators.accel = float(self.accel)
     new_actuators.gas = float(self.gas)
     self.frame += 1
+
+    # F-350: Trailer spoof - override trailer detection for full steering authority
+    try:
+      with open('/data/params/d/TrailerSpoof', 'rb') as _f:
+        if _f.read().strip() == b'1':
+          can_sends.append(self.packer.make_can_msg("TrailerInfo_FD1", 0, {}))
+    except (FileNotFoundError, IOError):
+      pass
+
+    # F-350: MRR_Detection radar spoof — confused deputy for longitudinal control
+    # Injects fake radar detections on bus 1 so IPMA generates signed ACCDATA.
+    # Sends at 20 Hz (every 5th frame at 100 Hz control rate).
+    # When braking is needed: inject a close fake lead to trigger IPMA deceleration.
+    # When no braking: inject all-invalid detections (no fake lead).
+    # NOTE: This can only ADD targets, not remove real ones. Primary long path is
+    # direct ACCDATA; this is the confused deputy backup for SecOC-signed ACC.
+    try:
+      with open('/data/params/d/RadarSpoof', 'rb') as _f:
+        if _f.read().strip() == b'1' and (self.frame % 5) == 0:
+          # Determine if we need a fake lead for braking
+          inject_lead = False
+          lead_dist = 0.0
+          lead_vrel = 0.0
+          if CC.longActive and self.accel < -0.5:
+            # Braking requested: inject fake lead to trigger IPMA decel
+            # Map desired deceleration to fake lead distance/velocity
+            # Closer lead + faster closing = harder braking from IPMA
+            inject_lead = True
+            v_ego = CS.out.vEgo
+            # Simple model: place fake lead at time-gap distance, closing at rate
+            # proportional to desired decel. IPMA's ACC will see this and brake.
+            time_gap = max(0.8, 2.0 + self.accel)  # 0.8s min gap at hard brake
+            lead_dist = max(5.0, v_ego * time_gap)  # minimum 5m
+            lead_vrel = max(-20.0, self.accel * 3.0)  # negative = closing
+
+          # Cycle scan index between 2 and 3 (the modes radar_interface processes)
+          radar_msgs = fordcan.create_radar_spoof_msgs(
+            self.radar_packer, self.CAN, self.radar_spoof_scan_index,
+            lead_dist=lead_dist, lead_vrel=lead_vrel, lead_azimuth=0.0,
+            inject_lead=inject_lead,
+          )
+          can_sends.extend(radar_msgs)
+          # Alternate between scan index 2 and 3
+          self.radar_spoof_scan_index = 3 if self.radar_spoof_scan_index == 2 else 2
+    except (FileNotFoundError, IOError):
+      pass
+
     return new_actuators, can_sends

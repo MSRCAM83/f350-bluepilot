@@ -86,8 +86,8 @@ class CarInterface(CarInterfaceBase):
       # LateralMotionControl2, ACCDATA are 16 bytes on these platforms
       if len(fingerprint[CAN.camera]):
         if fingerprint[CAN.camera].get(0x3d6) != 8 or fingerprint[CAN.camera].get(0x186) != 8:
-          carlog.error('dashcamOnly: SecOC is unsupported')
-          ret.dashcamOnly = True
+          carlog.error('dashcamOnly: SecOC detected but BYPASSED for F-350 confused deputy')
+          # ret.dashcamOnly = True  # BYPASSED for F-350 confused deputy
     else:
       # Lock out if the car does not have needed lateral and longitudinal control APIs.
       # Note that we also check CAN for adaptive cruise, but no known signal for LCA exists
@@ -108,7 +108,7 @@ class CarInterface(CarInterfaceBase):
 
     # Auto Transmission: 0x732 ECU or Gear_Shift_by_Wire_FD1
     found_ecus = [fw.ecu for fw in car_fw]
-    if Ecu.shiftByWire in found_ecus or 0x5A in fingerprint[CAN.main] or docs:
+    if Ecu.shiftByWire in found_ecus or 0x5A in fingerprint[CAN.main] or 0x176 in fingerprint[CAN.main] or docs:
       ret.transmissionType = TransmissionType.automatic
     else:
       ret.transmissionType = TransmissionType.manual
@@ -131,6 +131,7 @@ class CarInterface(CarInterfaceBase):
 
     ret.autoResumeSng = ret.minEnableSpeed == -1.
     ret.centerToFront = ret.wheelbase * 0.44
+    ret.carFingerprint = 'FORD_F_350_SD_LARIAT'
     return ret
 
   @staticmethod

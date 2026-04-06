@@ -57,6 +57,8 @@ class BluePilotLayout(Widget):
     self._refresh_toggles = (
       ("send_hands_free_cluster_msg", self._show_hands_free_ui),
       ("ShowBlindspotOverlay", self._show_blindspot),
+      ("TrailerSpoof", self._trailer_spoof),
+      ("RadarSpoof", self._radar_spoof),
       ("ShowBrakeStatus", self._show_brake_status),
       ("BPHideOnroadBorder", self._hide_onroad_border),
       ("BPShowConfidenceBall", self._show_confidence_ball),
@@ -95,6 +97,24 @@ class BluePilotLayout(Widget):
       lambda: tr("Display red overlay when vehicle is detected in blindspot."),
       initial_state=self._safe_get_bool(self._params, "ShowBlindspotOverlay"),
       callback=lambda state: self._toggle_callback(state, "ShowBlindspotOverlay"),
+      icon="warning.png"
+    )
+
+    # Trailer spoof toggle (F-350: override trailer detection for full IPMA steering authority)
+    self._trailer_spoof = toggle_item(
+      lambda: tr("Trailer Spoof"),
+      lambda: tr("Override trailer detection to restore full IPMA steering authority. Required for F-350 Super Duty."),
+      initial_state=self._safe_get_bool(self._params, "TrailerSpoof"),
+      callback=lambda state: self._toggle_callback(state, "TrailerSpoof"),
+      icon="warning.png"
+    )
+
+    # Radar spoof toggle (F-350: MRR_Detection confused deputy for longitudinal control)
+    self._radar_spoof = toggle_item(
+      lambda: tr("Radar Spoof"),
+      lambda: tr("Inject fake MRR_Detection radar data for longitudinal control via IPMA confused deputy. F-350 experimental."),
+      initial_state=self._safe_get_bool(self._params, "RadarSpoof"),
+      callback=lambda state: self._toggle_callback(state, "RadarSpoof"),
       icon="warning.png"
     )
 
@@ -405,6 +425,8 @@ class BluePilotLayout(Widget):
       self._ui_debug_log,
       SectionHeader(tr("Vehicle")),
       self._show_hands_free_ui,
+      self._trailer_spoof,
+      self._radar_spoof,
       self._vbatt_pause_charging,
       SectionHeader(tr("Visuals")),
       self._hide_onroad_border,
