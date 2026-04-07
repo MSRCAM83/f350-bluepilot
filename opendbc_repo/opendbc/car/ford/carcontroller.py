@@ -943,7 +943,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     send_ui = (self.main_on_last != main_on) or (self.lkas_enabled_last != CC.latActive) or (self.steer_alert_last != steer_alert)
     # send lkas ui msg at 1Hz or if ui state changes
     if (self.frame % CarControllerParams.LKAS_UI_STEP) == 0 or send_ui:
-      # can_sends.append(fordcan.create_lkas_ui_msg(self.packer, self.CAN, main_on, CC.latActive, self.hands, hud_control, CS.lkas_status_stock_values))  # F-350: disabled, preserves real IPMA LKA
+      pass  # F-350: IPMA_Data TX disabled — preserves real IPMA LKA status on cluster
 
     # send acc ui msg at 5Hz or if ui state changes
     send_bars = False
